@@ -1,8 +1,8 @@
 package play.mvc;
 
-import static org.fest.assertions.Assertions.assertThat;
-import static play.mvc.CookieDataCodec.decode;
-import static play.mvc.CookieDataCodec.encode;
+import io.netty.handler.codec.http.cookie.Cookie;
+import io.netty.handler.codec.http.cookie.ServerCookieDecoder;
+import org.junit.Test;
 
 import java.io.UnsupportedEncodingException;
 import java.net.URLEncoder;
@@ -10,9 +10,9 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 
-import org.jboss.netty.handler.codec.http.cookie.Cookie;
-import org.jboss.netty.handler.codec.http.cookie.ServerCookieDecoder;
-import org.junit.Test;
+import static org.fest.assertions.Assertions.assertThat;
+import static play.mvc.CookieDataCodec.decode;
+import static play.mvc.CookieDataCodec.encode;
 
 public class CookieDataCodecTest {
 

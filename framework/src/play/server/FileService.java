@@ -1,12 +1,16 @@
 package play.server;
 
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelFuture;
-import org.jboss.netty.channel.ChannelFutureListener;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.handler.codec.http.*;
-import org.jboss.netty.handler.stream.ChunkedFile;
-import org.jboss.netty.handler.stream.ChunkedInput;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufAllocator;
+import io.netty.buffer.Unpooled;
+import io.netty.handler.codec.http.HttpUtil;
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelFuture;
+import io.netty.channel.ChannelFutureListener;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.http.*;
+import io.netty.handler.stream.ChunkedFile;
+import io.netty.handler.stream.ChunkedInput;
 
 import play.Logger;
 import play.exceptions.UnexpectedException;
@@ -22,9 +26,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
 
+import static io.netty.buffer.Unpooled.wrappedBuffer;
 import static org.apache.commons.io.IOUtils.closeQuietly;
-import static org.jboss.netty.buffer.ChannelBuffers.wrappedBuffer;
-import static org.jboss.netty.handler.codec.http.HttpHeaders.Names.CONTENT_TYPE;
+import static io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
 
 public class FileService  {
 
@@ -33,19 +37,19 @@ public class FileService  {
         try {
             long fileLength = raf.length();
             
-            boolean isKeepAlive = HttpHeaders.isKeepAlive(nettyRequest) && nettyRequest.getProtocolVersion().equals(HttpVersion.HTTP_1_1);
+            boolean isKeepAlive = HttpUtil.isKeepAlive(nettyRequest) && nettyRequest.protocolVersion().equals(HttpVersion.HTTP_1_1);
             
-            if(Logger.isTraceEnabled()) {
+            if (Logger.isTraceEnabled()) {
                 Logger.trace("keep alive %s", String.valueOf(isKeepAlive));
                 Logger.trace("content type %s", (response.contentType != null ? response.contentType : MimeTypes.getContentType(localFile.getName(), "text/plain")));
             }
             
-            if (!nettyResponse.getStatus().equals(HttpResponseStatus.NOT_MODIFIED)) {
+            if (!HttpResponseStatus.NOT_MODIFIED.equals(nettyResponse.status())) {
                 // Add 'Content-Length' header only for a keep-alive connection.
                 if(Logger.isTraceEnabled()){
                     Logger.trace("file length " + fileLength);
                 }
-                nettyResponse.headers().set(HttpHeaders.Names.CONTENT_LENGTH, String.valueOf(fileLength));
+                nettyResponse.headers().set(HttpHeaderNames.CONTENT_LENGTH, String.valueOf(fileLength));
             }
 
             if (response.contentType != null) {
@@ -54,13 +58,13 @@ public class FileService  {
                 nettyResponse.headers().set(CONTENT_TYPE, (MimeTypes.getContentType(localFile.getName(), "text/plain")));
             }
 
-            nettyResponse.headers().set(HttpHeaders.Names.ACCEPT_RANGES, HttpHeaders.Values.BYTES);
+            nettyResponse.headers().set(HttpHeaderNames.ACCEPT_RANGES, HttpHeaderValues.BYTES);
 
             // Write the initial line and the header.
             ChannelFuture writeFuture = null;
 
             // Write the content.
-            if (!nettyRequest.getMethod().equals(HttpMethod.HEAD)) {
+            if (!HttpMethod.HEAD.equals(nettyRequest.method())) {
                 ChunkedInput chunkedInput = getChunckedInput(raf, MimeTypes.getContentType(localFile.getName(), "text/plain"), channel, nettyRequest, nettyResponse);
                 if (channel.isOpen()) {
                     channel.write(nettyResponse);
@@ -84,8 +88,8 @@ public class FileService  {
             exx.printStackTrace();
             closeQuietly(raf);
             try {
-                if (ctx.getChannel().isOpen()) {
-                    ctx.getChannel().close();
+                if (ctx.channel().isOpen()) {
+                    ctx.channel().close();
                 }
             } catch (Throwable ex) { /* Left empty */ }
         }
@@ -150,17 +154,32 @@ public class FileService  {
                 nettyResponse.headers().set("Content-length", length);
             }
         }
-        
+
         @Override
-        public Object nextChunk() throws Exception {
+        public long length() {
+            return this.fileLength;
+        }
+
+        @Override
+        public long progress() {
+            return this.byteRanges.length == 0 ? 0 : this.currentByteRange / this.byteRanges.length;
+        }
+
+        @Override
+        public Object readChunk(ChannelHandlerContext ctx) throws Exception {
+            return readChunk(ctx.alloc());
+        }
+
+        @Override
+        public Object readChunk(ByteBufAllocator alloc) throws Exception {
             if(Logger.isTraceEnabled())
                 Logger.trace("FileService nextChunk");
             try {
                 int count = 0;
-                byte[] buffer = new byte[chunkSize];
+                ByteBuf buffer= alloc.buffer(chunkSize);
                 while(count < chunkSize && currentByteRange < byteRanges.length && byteRanges[currentByteRange] != null) {
                     if(byteRanges[currentByteRange].remaining() > 0) {
-                        count += byteRanges[currentByteRange].fill(buffer, count);
+                        count += byteRanges[currentByteRange].fill(buffer.array(), count);
                     } else {
                         currentByteRange++;
                     }
@@ -177,15 +196,11 @@ public class FileService  {
         }
         
         @Override
-        public boolean hasNextChunk() throws Exception {
-            if(Logger.isTraceEnabled())
-                Logger.trace("FileService hasNextChunk() : " + (currentByteRange < byteRanges.length && byteRanges[currentByteRange].remaining() > 0));
-            return currentByteRange < byteRanges.length && byteRanges[currentByteRange].remaining() > 0;
-        }
-        
-        @Override
         public boolean isEndOfInput() throws Exception {
-            return !hasNextChunk();
+            if(Logger.isTraceEnabled()) {
+                Logger.trace("FileService hasNextChunk() : " + (currentByteRange < byteRanges.length && byteRanges[currentByteRange].remaining() > 0));
+            }
+            return currentByteRange >= byteRanges.length || byteRanges[currentByteRange].remaining() == 0;
         }
         
         @Override
